@@ -1,7 +1,8 @@
 import os
 import json
 import random
-from astrbot.api.all import *
+from astrbot.api.all import * # 包含 Context, Star, register, command 等
+from astrbot.api.event import MessageEvent # 显式导入 MessageEvent
 from .utils import compare_attributes, render_table
 
 @register("arknights_guess", "YourName", "明日方舟猜猜乐游戏", "1.0.0")
@@ -10,16 +11,24 @@ class ArknightsGuessPlugin(Star):
         super().__init__(context)
         # 加载数据
         data_path = os.path.join(os.path.dirname(__file__), "assets", "arknights_full_data.json")
-        with open(data_path, 'r', encoding='utf-8') as f:
-            self.operators = json.load(f)
+        if os.path.exists(data_path):
+            with open(data_path, 'r', encoding='utf-8') as f:
+                self.operators = json.load(f)
+        else:
+            self.operators = {}
         
-        # 存储每个会话的游戏状态: { session_id: { "target": "能天使", "history": [] } }
+        # 存储会话状态
         self.sessions = {}
 
     @command("方舟猜猜乐")
-    async def start_game(self, event: GuildEvent):
+    async def start_game(self, event: MessageEvent): # 将 GuildEvent 改为 MessageEvent
         '''开始一局明日方舟干员猜猜乐'''
         session_id = event.get_session_id()
+        
+        if not self.operators:
+            yield event.plain_result("❌ 插件数据文件丢失，无法开始游戏。")
+            return
+
         target_name = random.choice(list(self.operators.keys()))
         
         self.sessions[session_id] = {
@@ -28,21 +37,21 @@ class ArknightsGuessPlugin(Star):
             "tries": 0
         }
         
-        yield event.plain_result(f"🎮 游戏开始！我已经选好了一名干员，请直接发送干员名称进行猜测。\n你有 8 次机会。")
+        yield event.plain_result(f"🎮 游戏开始！我已经选好了一名干员。\n请直接发送干员名称进行猜测（共有 8 次机会）。")
 
     @event_message_type(EventMessageType.ALL)
-    async def on_message(self, event: GuildEvent):
+    async def on_message(self, event: MessageEvent): # 将 GuildEvent 改为 MessageEvent
         session_id = event.get_session_id()
         
-        # 如果该会话没在游戏中，不理会
+        # 如果该会话没在游戏中，直接跳过
         if session_id not in self.sessions:
             return
 
         user_input = event.get_plain_text().strip()
         
-        # 校验是否为干员名
+        # 如果输入的内容不是已知的干员，不触发逻辑（避免干扰正常聊天）
         if user_input not in self.operators:
-            return # 或者 yield event.plain_result("数据库没这人")
+            return 
 
         session = self.sessions[session_id]
         target_name = session["target"]
@@ -53,24 +62,31 @@ class ArknightsGuessPlugin(Star):
         session["tries"] += 1
         
         # 2. 生成反馈图
-        img_path = os.path.join(os.path.dirname(__file__), f"temp_{session_id}.png")
-        render_table(session["history"], img_path)
+        # 建议图片文件名包含 session_id 以防止多用户冲突
+        img_name = f"temp_guess_{session_id}.png"
+        img_path = os.path.join(os.path.dirname(__file__), img_name)
         
-        # 3. 发送图片反馈
-        yield event.image_result(img_path)
+        try:
+            render_table(session["history"], img_path)
+            # 3. 发送图片反馈
+            yield event.image_result(img_path)
+        except Exception as e:
+            yield event.plain_result(f"❌ 绘图出错: {e}")
+            return
         
         # 4. 胜负判定
         if user_input == target_name:
-            # 猜对了，获取随机立绘
             urls = self.operators[target_name].get("original_url", [])
-            img_url = random.choice(urls) if urls else None
-            
             yield event.plain_result(f"🎉 恭喜！答案正是【{target_name}】！")
-            if img_url:
-                yield event.image_result(img_url)
+            if urls:
+                yield event.image_result(random.choice(urls))
             
-            del self.sessions[session_id] # 结束游戏
+            del self.sessions[session_id] # 结束并清理
             
         elif session["tries"] >= 8:
             yield event.plain_result(f"💀 机会用尽！正确答案是：{target_name}")
-            del self.sessions[session_id]
+            urls = self.operators[target_name].get("original_url", [])
+            if urls:
+                yield event.image_result(random.choice(urls))
+            
+            del self.sessions[session_id] # 结束并清理
