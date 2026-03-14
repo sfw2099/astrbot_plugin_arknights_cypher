@@ -1,24 +1,76 @@
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
-from astrbot.api.star import Context, Star, register
-from astrbot.api import logger
+import os
+import json
+import random
+from astrbot.api.all import *
+from .utils import compare_attributes, render_table
 
-@register("helloworld", "YourName", "一个简单的 Hello World 插件", "1.0.0")
-class MyPlugin(Star):
+@register("arknights_guess", "YourName", "明日方舟猜猜乐游戏", "1.0.0")
+class ArknightsGuessPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
+        # 加载数据
+        data_path = os.path.join(os.path.dirname(__file__), "assets", "arknights_full_data.json")
+        with open(data_path, 'r', encoding='utf-8') as f:
+            self.operators = json.load(f)
+        
+        # 存储每个会话的游戏状态: { session_id: { "target": "能天使", "history": [] } }
+        self.sessions = {}
 
-    async def initialize(self):
-        """可选择实现异步的插件初始化方法，当实例化该插件类之后会自动调用该方法。"""
+    @command("方舟猜猜乐")
+    async def start_game(self, event: GuildEvent):
+        '''开始一局明日方舟干员猜猜乐'''
+        session_id = event.get_session_id()
+        target_name = random.choice(list(self.operators.keys()))
+        
+        self.sessions[session_id] = {
+            "target": target_name,
+            "history": [],
+            "tries": 0
+        }
+        
+        yield event.plain_result(f"🎮 游戏开始！我已经选好了一名干员，请直接发送干员名称进行猜测。\n你有 8 次机会。")
 
-    # 注册指令的装饰器。指令名为 helloworld。注册成功后，发送 `/helloworld` 就会触发这个指令，并回复 `你好, {user_name}!`
-    @filter.command("helloworld")
-    async def helloworld(self, event: AstrMessageEvent):
-        """这是一个 hello world 指令""" # 这是 handler 的描述，将会被解析方便用户了解插件内容。建议填写。
-        user_name = event.get_sender_name()
-        message_str = event.message_str # 用户发的纯文本消息字符串
-        message_chain = event.get_messages() # 用户所发的消息的消息链 # from astrbot.api.message_components import *
-        logger.info(message_chain)
-        yield event.plain_result(f"Hello, {user_name}, 你发了 {message_str}!") # 发送一条纯文本消息
+    @event_message_type(EventMessageType.ALL)
+    async def on_message(self, event: GuildEvent):
+        session_id = event.get_session_id()
+        
+        # 如果该会话没在游戏中，不理会
+        if session_id not in self.sessions:
+            return
 
-    async def terminate(self):
-        """可选择实现异步的插件销毁方法，当插件被卸载/停用时会调用。"""
+        user_input = event.get_plain_text().strip()
+        
+        # 校验是否为干员名
+        if user_input not in self.operators:
+            return # 或者 yield event.plain_result("数据库没这人")
+
+        session = self.sessions[session_id]
+        target_name = session["target"]
+        
+        # 1. 对比属性
+        row_data = compare_attributes(user_input, target_name, self.operators)
+        session["history"].append(row_data)
+        session["tries"] += 1
+        
+        # 2. 生成反馈图
+        img_path = os.path.join(os.path.dirname(__file__), f"temp_{session_id}.png")
+        render_table(session["history"], img_path)
+        
+        # 3. 发送图片反馈
+        yield event.image_result(img_path)
+        
+        # 4. 胜负判定
+        if user_input == target_name:
+            # 猜对了，获取随机立绘
+            urls = self.operators[target_name].get("original_url", [])
+            img_url = random.choice(urls) if urls else None
+            
+            yield event.plain_result(f"🎉 恭喜！答案正是【{target_name}】！")
+            if img_url:
+                yield event.image_result(img_url)
+            
+            del self.sessions[session_id] # 结束游戏
+            
+        elif session["tries"] >= 8:
+            yield event.plain_result(f"💀 机会用尽！正确答案是：{target_name}")
+            del self.sessions[session_id]
