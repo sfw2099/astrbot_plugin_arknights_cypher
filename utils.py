@@ -1,35 +1,25 @@
 import os
 from PIL import Image, ImageDraw, ImageFont
 
-# --- 颜色常量定义 ---
-COLOR_BG = (43, 45, 49)        # 背景深灰
-COLOR_HEADER = (18, 18, 19)     # 表头黑色
-COLOR_CORRECT = (83, 141, 78)   # 绿色 (相同)
-COLOR_WRONG = (186, 73, 73)     # 红色 (不同)
-COLOR_UNKNOWN = (110, 110, 110) # 灰色 (未知)
-COLOR_TEXT = (255, 255, 255)    # 白色文字
-COLOR_BORDER = (60, 60, 60)     # 边框深灰
-
 # 获取当前文件所在目录
-BASE_PATH = os.path.dirname(__file__)
-# 默认字体路径，建议放在 assets 下
-FONT_PATH = os.path.join(BASE_PATH, "assets", "msyh.ttc") 
+BASE_PATH = os.path.dirname(os.path.abspath(__file__))
+
+# 修改点：去掉 assets，直接从 BASE_PATH 获取
+FONT_PATH = os.path.join(BASE_PATH, "STZHONGS.TTF") 
 
 def get_font(size):
-    """ 获取字体对象，如果指定路径不存在则返回系统默认字体 """
     try:
-        return ImageFont.truetype(FONT_PATH, size)
-    except Exception:
-        # 如果找不到字体，尝试几个常见的 Linux/Windows 路径
-        alt_fonts = [
-            "simhei.ttf", 
-            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-        ]
-        for f in alt_fonts:
-            try: return ImageFont.truetype(f, size)
-            except: continue
-        return ImageFont.load_default()
+        # 再次确认文件名大小写
+        if os.path.exists(FONT_PATH):
+            return ImageFont.truetype(FONT_PATH, size)
+        else:
+            # 兼容性：如果全大写找不到，尝试全小写
+            alt_path = os.path.join(BASE_PATH, "stzhongs.ttf")
+            if os.path.exists(alt_path):
+                return ImageFont.truetype(alt_path, size)
+    except:
+        pass
+    return ImageFont.load_default()
 
 def compare_attributes(guess_name, target_name, operators):
     """
