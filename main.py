@@ -1,8 +1,7 @@
 import os
 import json
 import random
-from astrbot.api.all import * # 包含 Context, Star, register, command 等
-from astrbot.api.event import MessageEvent # 显式导入 MessageEvent
+from astrbot.api.all import * # 尝试使用这个聚合导入
 from .utils import compare_attributes, render_table
 
 @register("arknights_guess", "YourName", "明日方舟猜猜乐游戏", "1.0.0")
@@ -21,7 +20,7 @@ class ArknightsGuessPlugin(Star):
         self.sessions = {}
 
     @command("方舟猜猜乐")
-    async def start_game(self, event: MessageEvent): # 将 GuildEvent 改为 MessageEvent
+    async def start_game(self, event: AstrMessageEvent): # 改为 AstrMessageEvent
         '''开始一局明日方舟干员猜猜乐'''
         session_id = event.get_session_id()
         
@@ -40,13 +39,14 @@ class ArknightsGuessPlugin(Star):
         yield event.plain_result(f"🎮 游戏开始！我已经选好了一名干员。\n请直接发送干员名称进行猜测（共有 8 次机会）。")
 
     @event_message_type(EventMessageType.ALL)
-    async def on_message(self, event: MessageEvent): # 将 GuildEvent 改为 MessageEvent
+    async def on_message(self, event: AstrMessageEvent): # 改为 AstrMessageEvent
         session_id = event.get_session_id()
         
         # 如果该会话没在游戏中，直接跳过
         if session_id not in self.sessions:
             return
 
+        # 检查是否是纯文本消息
         user_input = event.get_plain_text().strip()
         
         # 如果输入的内容不是已知的干员，不触发逻辑（避免干扰正常聊天）
@@ -62,7 +62,6 @@ class ArknightsGuessPlugin(Star):
         session["tries"] += 1
         
         # 2. 生成反馈图
-        # 建议图片文件名包含 session_id 以防止多用户冲突
         img_name = f"temp_guess_{session_id}.png"
         img_path = os.path.join(os.path.dirname(__file__), img_name)
         
@@ -71,7 +70,9 @@ class ArknightsGuessPlugin(Star):
             # 3. 发送图片反馈
             yield event.image_result(img_path)
         except Exception as e:
-            yield event.plain_result(f"❌ 绘图出错: {e}")
+            # 这里的报错通常是因为缺少字体或 Pillow 没装
+            yield event.plain_result(f"❌ 绘图出错，请检查服务器环境。")
+            print(f"[Arknights Error] {e}")
             return
         
         # 4. 胜负判定
@@ -81,7 +82,7 @@ class ArknightsGuessPlugin(Star):
             if urls:
                 yield event.image_result(random.choice(urls))
             
-            del self.sessions[session_id] # 结束并清理
+            del self.sessions[session_id]
             
         elif session["tries"] >= 8:
             yield event.plain_result(f"💀 机会用尽！正确答案是：{target_name}")
@@ -89,4 +90,4 @@ class ArknightsGuessPlugin(Star):
             if urls:
                 yield event.image_result(random.choice(urls))
             
-            del self.sessions[session_id] # 结束并清理
+            del self.sessions[session_id]
