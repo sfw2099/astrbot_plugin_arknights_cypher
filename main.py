@@ -55,12 +55,16 @@ class ArknightsGuessPlugin(Star):
         if session_id not in self.sessions:
             return
 
-        user_input = event.get_plain_text().strip()
-        if user_input not in self.operators:
-            return 
-
-        session = self.sessions[session_id]
-        target_name = session["target"]
+        user_input = ""
+        try:
+            # 优先使用 message_str，它通常包含去除了指令前缀的纯文本
+            user_input = event.message_str.strip()
+        except:
+            # 备用方案
+            user_input = event.get_plain_text().strip() if hasattr(event, 'get_plain_text') else ""
+        
+        if not user_input or user_input not in self.operators:
+            return
         
         # 1. 对比
         row_data = compare_attributes(user_input, target_name, self.operators)
