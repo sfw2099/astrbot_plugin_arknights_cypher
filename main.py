@@ -55,39 +55,48 @@ class ArknightsGuessPlugin(Star):
         if session_id not in self.sessions:
             return
 
-        user_input = ""
+        # 获取用户输入
         try:
-            # 优先使用 message_str，它通常包含去除了指令前缀的纯文本
             user_input = event.message_str.strip()
         except:
-            # 备用方案
             user_input = event.get_plain_text().strip() if hasattr(event, 'get_plain_text') else ""
         
+        # 必须是有效干员才继续
         if not user_input or user_input not in self.operators:
-            return
-        
-        # 1. 对比
+            return 
+
+        # --- 核心修复点：确保变量已定义 ---
+        session = self.sessions[session_id]
+        target_name = session["target"] # <--- 确保这一行存在
+        # -------------------------------
+
+        # 1. 对比属性
         row_data = compare_attributes(user_input, target_name, self.operators)
         session["history"].append(row_data)
         session["tries"] += 1
         
-        # 2. 绘图 (图片也存放在插件根目录)
-        img_path = os.path.join(self.plugin_dir, f"temp_{session_id}.png")
+        # 2. 绘图
+        img_name = f"temp_{session_id}.png"
+        img_path = os.path.join(self.plugin_dir, img_name)
         
         try:
             render_table(session["history"], img_path)
             yield event.image_result(img_path)
         except Exception as e:
             logger.error(f"绘图失败: {e}")
-            yield event.plain_result("❌ 绘图失败，请检查字体文件是否存在。")
+            yield event.plain_result(f"❌ 绘图失败，请联系管理员查看后台日志。")
             return
         
         # 3. 结果判定
         if user_input == target_name:
             urls = self.operators[target_name].get("original_url", [])
             yield event.plain_result(f"🎉 恭喜猜中！答案是：{target_name}")
-            if urls: yield event.image_result(random.choice(urls))
+            if urls: 
+                yield event.image_result(random.choice(urls))
             del self.sessions[session_id]
         elif session["tries"] >= 8:
             yield event.plain_result(f"💀 机会用尽！答案是：{target_name}")
+            urls = self.operators[target_name].get("original_url", [])
+            if urls: 
+                yield event.image_result(random.choice(urls))
             del self.sessions[session_id]
