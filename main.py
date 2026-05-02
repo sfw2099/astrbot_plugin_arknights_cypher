@@ -2,10 +2,10 @@ import os
 import json
 import random
 import logging
-import base64
-import io
+import asyncio
 from astrbot.api.all import *
 from .utils import compare_attributes, render_table
+from .fetch_operators import check_missing_operators, update_missing_operators
 
 logger = logging.getLogger("astrbot")
 
@@ -72,6 +72,65 @@ class ArknightsGuessPlugin(Star):
                 yield event.image_result(random.choice(urls))
                 
             del self.sessions[session_id]
+
+    @command("检查干员更新")
+    async def check_operator_updates(self, event: AstrMessageEvent):
+        yield event.plain_result("正在连接 PRTS Wiki 检查干员更新，请稍候...")
+
+        try:
+            loop = asyncio.get_event_loop()
+            missing, wiki_count, current_count = await loop.run_in_executor(
+                None, check_missing_operators, self.plugin_dir
+            )
+        except Exception as e:
+            logger.error(f"检查干员更新失败: {e}")
+            yield event.plain_result("检查失败，无法连接到 PRTS Wiki，请稍后重试。")
+            return
+
+        if missing is None:
+            yield event.plain_result("检查失败，无法连接到 PRTS Wiki，请稍后重试。")
+            return
+
+        if not missing:
+            yield event.plain_result(
+                f"数据已是最新！当前共 {current_count} 名干员，Wiki 共 {wiki_count} 名。"
+            )
+            return
+
+        missing_list = "\n".join(f"  {i+1}. {n}" for i, n in enumerate(missing[:15]))
+        truncate = f"\n  ... 等共 {len(missing)} 名" if len(missing) > 15 else ""
+        yield event.plain_result(
+            f"发现 {len(missing)} 名新干员 "
+            f"(Wiki: {wiki_count} → 本地: {current_count})：\n"
+            f"{missing_list}{truncate}\n\n正在自动拉取数据，请稍候..."
+        )
+
+        try:
+            result = await loop.run_in_executor(
+                None, update_missing_operators, self.plugin_dir, missing
+            )
+        except Exception as e:
+            logger.error(f"更新干员数据失败: {e}")
+            yield event.plain_result(f"数据拉取失败: {e}")
+            return
+
+        data_path = os.path.join(self.plugin_dir, "arknights_fixed_positions.json")
+        try:
+            with open(data_path, 'r', encoding='utf-8') as f:
+                self.operators = json.load(f)
+            self.high_star_names = [
+                name for name, info in self.operators.items()
+                if info.get("星级") in ["4", "5", "6"]
+            ]
+        except Exception as e:
+            logger.error(f"重新加载数据失败: {e}")
+
+        yield event.plain_result(
+            f"更新完成！成功添加 {len(result['added'])} 名干员，"
+            f"失败 {len(result['failed'])} 名。\n"
+            f"当前共 {len(self.operators)} 名干员 "
+            f"(高星题库 {len(self.high_star_names)} 名)。"
+        )
 
     @event_message_type(EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
