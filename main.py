@@ -22,23 +22,18 @@ class ArknightsGuessPlugin(Star):
         data_path = os.path.join(self.plugin_dir, "arknights_fixed_positions.json")
 
         self.operators = {}
-        self.high_star_names = [] # 新增：存放4-6星干员名字
+        self.high_star_names = [] # 题库（按星数范围筛选）
         self.sessions = {}
         self.blocked_keywords = []   # 屏蔽词列表（包含匹配）
-        self.star_min, self.star_max = 4, 6  # 抽取星数范围
+        self.star_min, self.star_max = 4, 6  # 抽取星数范围（真实星级 1-6）
 
         try:
             if os.path.exists(data_path):
                 with open(data_path, 'r', encoding='utf-8') as f:
                     self.operators = json.load(f)
-
-                # 核心逻辑：筛选 4, 5, 6 星干员作为题库
-                self.high_star_names = [
-                    name for name, info in self.operators.items()
-                    if info.get("星级") in ["4", "5", "6"]
-                ]
-
-                logger.info(f"明日方舟猜猜乐数据加载成功: 共 {len(self.operators)} 条，已锁定 {len(self.high_star_names)} 名高星干员作为题库。")
+                self._migrate_star_ratings(data_path)
+                self._rebuild_pool()
+                logger.info(f"明日方舟猜猜乐数据加载成功: 共 {len(self.operators)} 条，题库 {len(self.high_star_names)} 名（{self.star_min}~{self.star_max} 星）。")
             else:
                 logger.warning(f"未找到数据文件: {data_path}")
         except Exception as e:
@@ -46,6 +41,27 @@ class ArknightsGuessPlugin(Star):
 
         self._load_block_keywords()
         self._load_star_range()
+        self._rebuild_pool()
+
+    def _migrate_star_ratings(self, data_path):
+        """星级偏移迁移：PRTS wikitext 稀有度为 0-indexed（0-5 = 实际 1-6 星）。
+
+        旧数据特征：存在星级为 '0' 的条目（Robot 干员，真实体系无 0 星）。
+        检测到则全体 +1 并写回（一次性，幂等）。
+        """
+        has_zero = any(str(info.get("星级")) == "0" for info in self.operators.values())
+        if not has_zero:
+            return
+        for info in self.operators.values():
+            raw = info.get("星级")
+            if str(raw).isdigit():
+                info["星级"] = str(int(raw) + 1)
+        try:
+            with open(data_path, 'w', encoding='utf-8') as f:
+                json.dump(self.operators, f, ensure_ascii=False, indent=2)
+            logger.info("星级数据已迁移为真实星级（+1，旧格式 0-5 → 1-6）。")
+        except Exception as e:
+            logger.error(f"星级迁移写回失败: {e}")
 
     # ==================== 屏蔽词与星数范围存储 ====================
 
@@ -192,6 +208,91 @@ class ArknightsGuessPlugin(Star):
             f"⭐ 已设置抽取星数范围：{lo}~{hi} 星（题库 {len(self.high_star_names)} 名）。"
         )
 
+    @command("随机干员")
+    async def random_operator(self, event: AstrMessageEvent):
+        """随机抽取干员并返回随机立绘：/随机干员 [星级]，如 /随机干员 6 或 /随机干员 4 6"""
+        if not self.operators:
+            yield event.plain_result("干员数据未加载，请先发送 /检查干员更新。")
+            return
+        raw = str(event.message_str or "").strip()
+        arg = re.sub(r"^[/／]?\s*随机干员\s*", "", raw).strip()
+        pool = list(self.operators.keys())
+        if arg:
+            parts = arg.replace("～", " ").replace("-", " ").split()
+            try:
+                nums = [int(p) for p in parts]
+            except ValueError:
+                yield event.plain_result("用法：/随机干员 ｜ /随机干员 6 ｜ /随机干员 4 6")
+                return
+            if len(nums) == 1:
+                lo = hi = nums[0]
+            elif len(nums) == 2:
+                lo, hi = min(nums), max(nums)
+            else:
+                yield event.plain_result("用法：/随机干员 ｜ /随机干员 6 ｜ /随机干员 4 6")
+                return
+            if not (1 <= lo <= hi <= 6):
+                yield event.plain_result("星数范围需在 1~6 之间。")
+                return
+            pool = [n for n, info in self.operators.items()
+                    if str(info.get("星级", "")).isdigit() and lo <= int(info.get("星级")) <= hi]
+            if not pool:
+                yield event.plain_result(f"该星数范围（{lo}~{hi} 星）没有干员数据。")
+                return
+        name = random.choice(pool)
+        urls = self.operators[name].get("original_url", [])
+        star = self.operators[name].get("星级", "?")
+        yield event.plain_result(f"🎲 随机干员：【{name}】（{star} 星）")
+        if urls:
+            yield event.image_result(random.choice(urls))
+        else:
+            yield event.plain_result("（该干员暂无立绘数据）")
+
+    @command("干员信息")
+    async def operator_info(self, event: AstrMessageEvent):
+        """查询干员主要信息并展示一张立绘：/干员信息 <干员名>"""
+        if not self.operators:
+            yield event.plain_result("干员数据未加载，请先发送 /检查干员更新。")
+            return
+        raw = str(event.message_str or "").strip()
+        name = re.sub(r"^[/／]?\s*干员信息\s*", "", raw).strip()
+        if not name:
+            yield event.plain_result("用法：/干员信息 <干员名>（如：/干员信息 维什戴尔）")
+            return
+        # 精确匹配优先，其次包含匹配（唯一时直接用）
+        if name in self.operators:
+            target = name
+        else:
+            matches = [n for n in self.operators if name in n]
+            if len(matches) == 1:
+                target = matches[0]
+            elif len(matches) > 1:
+                preview = "、".join(matches[:8]) + ("…" if len(matches) > 8 else "")
+                yield event.plain_result(f"找到 {len(matches)} 名包含「{name}」的干员：{preview}\n请输入完整名称。")
+                return
+            else:
+                yield event.plain_result(f"未找到干员「{name}」。请确认名称（可用 /检查干员更新 同步数据）。")
+                return
+        info = self.operators[target]
+        lines = [
+            f"📋 【{target}】",
+            f"⭐ 星级：{info.get('星级', '未知')}",
+            f"⚔️ 职业：{info.get('职业', '未知')} - {info.get('分支', '未知')}",
+            f"📍 位置：{info.get('位置', '未知')}",
+            f"👤 性别：{info.get('性别', '未知')}｜ 种族：{info.get('种族', '未知')}",
+            f"🏛️ 势力：{info.get('阵营', '未知')}",
+            f"🎨 画师：{info.get('画师', '未知')}",
+        ]
+        tags = info.get("标签") or []
+        if tags:
+            lines.append(f"🏷️ 标签：{'、'.join(str(t) for t in tags)}")
+        yield event.plain_result("\n".join(lines))
+        urls = info.get("original_url", [])
+        if urls:
+            yield event.image_result(random.choice(urls))
+        else:
+            yield event.plain_result("（该干员暂无立绘数据）")
+
     @command("猜干员")
     async def arknights_guess(self, event: AstrMessageEvent):
         session_id = event.get_session_id()
@@ -273,10 +374,8 @@ class ArknightsGuessPlugin(Star):
         try:
             with open(data_path, 'r', encoding='utf-8') as f:
                 self.operators = json.load(f)
-            self.high_star_names = [
-                name for name, info in self.operators.items()
-                if info.get("星级") in ["4", "5", "6"]
-            ]
+            self._migrate_star_ratings(data_path)
+            self._rebuild_pool()
         except Exception as e:
             logger.error(f"重新加载数据失败: {e}")
 

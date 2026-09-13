@@ -78,7 +78,8 @@ def fetch_operator_detail(name):
 
         prof = extract(r"\|职业=([^|\n]+)")
         sub_prof = extract(r"\|分支=([^|\n]+)")
-        rarity = extract(r"\|稀有度=([1-6])", "0")
+        # PRTS wikitext 的稀有度为 0-indexed（0-5 对应实际 1-6 星），写入时 +1
+        rarity = str(int(extract(r"\|稀有度=([1-6])", "0") or 0) + 1)
         gender = extract(r"\|性别=([^|\n]+)")
         race = extract(r"\|种族=([^|\n]+)")
         nation = extract(r"\|所属国家=([^|\n]+)")
