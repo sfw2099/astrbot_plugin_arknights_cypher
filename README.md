@@ -1,6 +1,6 @@
 # 明日方舟干员猜猜挑战 (Arknights Cypher)
 
-![Version](https://img.shields.io/badge/version-v1.4.0-blue)
+![Version](https://img.shields.io/badge/version-v1.5.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![License](https://img.shields.io/badge/license-AGPL--3.0-orange)
 
@@ -62,7 +62,16 @@ git clone https://github.com/sfw2099/astrbot_plugin_arknights_cypher.git
 | `猜干员` | 开始一局猜干员游戏 |
 | `结束猜干员` | 提前结束当前游戏并揭示答案 |
 | `检查干员更新` | 连接 PRTS Wiki 检查本地数据是否缺少新干员，自动拉取更新 |
+| `干员屏蔽 <文字>` | 添加屏蔽词：抽干员时名字包含该文字的干员将被跳过（包含匹配，不区分大小写） |
+| `干员屏蔽列表` | 查看当前屏蔽词列表 |
+| `干员屏蔽移除 <文字>` | 移除指定屏蔽词 |
+| `干员屏蔽清空` | 清空全部屏蔽词 |
+| `干员星数` | 查看当前抽取星数范围 |
+| `干员星数 <n>` | 设置仅抽取 n 星干员（如 `/干员星数 6`） |
+| `干员星数 <a> <b>` | 设置抽取 a~b 星范围（如 `/干员星数 4 6`） |
 | 直接发送干员名 | 进行猜测 |
+
+> 屏蔽词与星数范围设置**持久保存**（重启后仍生效）。若屏蔽词覆盖了全部题库，当局自动忽略屏蔽并提示。屏蔽词上限 100 个。
 
 ---
 

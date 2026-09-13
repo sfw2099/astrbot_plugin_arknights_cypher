@@ -1,6 +1,7 @@
 import os
 import json
 import random
+import re
 import logging
 import asyncio
 from astrbot.api.all import *
@@ -9,33 +10,187 @@ from .fetch_operators import check_missing_operators, update_missing_operators
 
 logger = logging.getLogger("astrbot")
 
-@register("arknights_guess", "YourName", "明日方舟猜猜乐", "1.2.7")
+@register("arknights_guess", "YourName", "明日方舟猜猜乐", "1.5.0")
 class ArknightsGuessPlugin(Star):
+    BLOCK_FILE = "blocked_keywords.json"
+    STAR_FILE = "star_range.json"
+    MAX_BLOCKED = 100
+
     def __init__(self, context: Context):
         super().__init__(context)
         self.plugin_dir = os.path.dirname(os.path.abspath(__file__))
         data_path = os.path.join(self.plugin_dir, "arknights_fixed_positions.json")
-        
+
         self.operators = {}
         self.high_star_names = [] # 新增：存放4-6星干员名字
         self.sessions = {}
+        self.blocked_keywords = []   # 屏蔽词列表（包含匹配）
+        self.star_min, self.star_max = 4, 6  # 抽取星数范围
 
         try:
             if os.path.exists(data_path):
                 with open(data_path, 'r', encoding='utf-8') as f:
                     self.operators = json.load(f)
-                
+
                 # 核心逻辑：筛选 4, 5, 6 星干员作为题库
                 self.high_star_names = [
                     name for name, info in self.operators.items()
                     if info.get("星级") in ["4", "5", "6"]
                 ]
-                
+
                 logger.info(f"明日方舟猜猜乐数据加载成功: 共 {len(self.operators)} 条，已锁定 {len(self.high_star_names)} 名高星干员作为题库。")
             else:
                 logger.warning(f"未找到数据文件: {data_path}")
         except Exception as e:
             logger.error(f"加载数据异常: {e}")
+
+        self._load_block_keywords()
+        self._load_star_range()
+
+    # ==================== 屏蔽词与星数范围存储 ====================
+
+    def _load_block_keywords(self):
+        path = os.path.join(self.plugin_dir, self.BLOCK_FILE)
+        try:
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    self.blocked_keywords = [str(x) for x in data if str(x).strip()]
+        except Exception as e:
+            logger.error(f"加载屏蔽词失败: {e}")
+
+    def _save_block_keywords(self):
+        path = os.path.join(self.plugin_dir, self.BLOCK_FILE)
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(self.blocked_keywords, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"保存屏蔽词失败: {e}")
+
+    def _load_star_range(self):
+        path = os.path.join(self.plugin_dir, self.STAR_FILE)
+        try:
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                lo, hi = int(data.get("min", 4)), int(data.get("max", 6))
+                if 1 <= lo <= hi <= 6:
+                    self.star_min, self.star_max = lo, hi
+        except Exception as e:
+            logger.error(f"加载星数范围失败: {e}")
+
+    def _save_star_range(self):
+        path = os.path.join(self.plugin_dir, self.STAR_FILE)
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump({"min": self.star_min, "max": self.star_max}, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"保存星数范围失败: {e}")
+
+    def _rebuild_pool(self):
+        """按当前星数范围重建题库。"""
+        self.high_star_names = [
+            name for name, info in self.operators.items()
+            if str(info.get("星级", "")).isdigit() and self.star_min <= int(info.get("星级")) <= self.star_max
+        ]
+
+    def _pick_target(self):
+        """从题库中按屏蔽词过滤后随机抽取。返回 (target_name, 警告消息或None)。"""
+        blocked = [kw for kw in self.blocked_keywords if kw.strip()]
+        pool = [n for n in self.high_star_names
+                if not any(kw.lower() in n.lower() for kw in blocked)]
+        if not pool:
+            return random.choice(self.high_star_names), "⚠️ 屏蔽词覆盖了全部题库，本局忽略屏蔽规则。"
+        return random.choice(pool), None
+
+    # ==================== 屏蔽词指令 ====================
+
+    @command("干员屏蔽")
+    async def block_operator(self, event: AstrMessageEvent):
+        raw = str(event.message_str or "").strip()
+        keyword = re.sub(r"^[/／]?\s*干员屏蔽\s*", "", raw).strip()
+        if not keyword:
+            yield event.plain_result("用法：/干员屏蔽 <文字>——抽干员时名字包含该文字的干员将被跳过。\n相关：/干员屏蔽列表 /干员屏蔽移除 <文字> /干员屏蔽清空")
+            return
+        if len(self.blocked_keywords) >= self.MAX_BLOCKED:
+            yield event.plain_result(f"屏蔽词已达上限（{self.MAX_BLOCKED} 个），请先清理：/干员屏蔽列表")
+            return
+        if any(kw.lower() == keyword.lower() for kw in self.blocked_keywords):
+            yield event.plain_result(f"屏蔽词「{keyword}」已存在。")
+            return
+        self.blocked_keywords.append(keyword)
+        self._save_block_keywords()
+        pool_cnt = len([n for n in self.high_star_names
+                        if not any(kw.lower() in n.lower() for kw in self.blocked_keywords)])
+        yield event.plain_result(f"🚫 已添加屏蔽词「{keyword}」（当前 {len(self.blocked_keywords)} 个，剩余可抽干员 {pool_cnt} 名）。")
+
+    @command("干员屏蔽列表")
+    async def list_blocked(self, event: AstrMessageEvent):
+        if not self.blocked_keywords:
+            yield event.plain_result("当前没有屏蔽词。用法：/干员屏蔽 <文字>")
+            return
+        lines = [f"🚫 屏蔽词列表（{len(self.blocked_keywords)} 个，包含匹配）："]
+        lines.extend(f"  {i+1}. {kw}" for i, kw in enumerate(self.blocked_keywords))
+        yield event.plain_result("\n".join(lines))
+
+    @command("干员屏蔽移除")
+    async def unblock_operator(self, event: AstrMessageEvent):
+        raw = str(event.message_str or "").strip()
+        keyword = re.sub(r"^[/／]?\s*干员屏蔽移除\s*", "", raw).strip()
+        if not keyword:
+            yield event.plain_result("用法：/干员屏蔽移除 <文字>")
+            return
+        before = len(self.blocked_keywords)
+        self.blocked_keywords = [kw for kw in self.blocked_keywords if kw.lower() != keyword.lower()]
+        if len(self.blocked_keywords) == before:
+            yield event.plain_result(f"未找到屏蔽词「{keyword}」。")
+            return
+        self._save_block_keywords()
+        yield event.plain_result(f"✅ 已移除屏蔽词「{keyword}」（剩余 {len(self.blocked_keywords)} 个）。")
+
+    @command("干员屏蔽清空")
+    async def clear_blocked(self, event: AstrMessageEvent):
+        n = len(self.blocked_keywords)
+        self.blocked_keywords = []
+        self._save_block_keywords()
+        yield event.plain_result(f"🧹 已清空全部屏蔽词（原 {n} 个）。")
+
+    # ==================== 星数范围指令 ====================
+
+    @command("干员星数")
+    async def set_star_range(self, event: AstrMessageEvent):
+        raw = str(event.message_str or "").strip()
+        arg = re.sub(r"^[/／]?\s*干员星数\s*", "", raw).strip()
+        if not arg:
+            pool_cnt = len(self.high_star_names)
+            yield event.plain_result(
+                f"⭐ 当前抽取星数范围：{self.star_min}~{self.star_max} 星（题库 {pool_cnt} 名）\n"
+                "用法：/干员星数 6（仅六星）｜ /干员星数 4 6（四到六星）"
+            )
+            return
+        parts = arg.replace("～", " ").replace("-", " ").split()
+        try:
+            nums = [int(p) for p in parts]
+        except ValueError:
+            yield event.plain_result("用法：/干员星数 6 ｜ /干员星数 4 6（星数 1~6）")
+            return
+        if len(nums) == 1:
+            lo = hi = nums[0]
+        elif len(nums) == 2:
+            lo, hi = min(nums), max(nums)
+        else:
+            yield event.plain_result("用法：/干员星数 6 ｜ /干员星数 4 6")
+            return
+        if not (1 <= lo <= hi <= 6):
+            yield event.plain_result("星数范围需在 1~6 之间且起点不大于终点。")
+            return
+        self.star_min, self.star_max = lo, hi
+        self._save_star_range()
+        self._rebuild_pool()
+        yield event.plain_result(
+            f"⭐ 已设置抽取星数范围：{lo}~{hi} 星（题库 {len(self.high_star_names)} 名）。"
+        )
 
     @command("猜干员")
     async def arknights_guess(self, event: AstrMessageEvent):
@@ -48,7 +203,7 @@ class ArknightsGuessPlugin(Star):
             yield event.plain_result("干员数据未加载或星级筛选后为空，请检查数据文件。")
             return
 
-        target_name = random.choice(self.high_star_names)
+        target_name, warn = self._pick_target()
         
         self.sessions[session_id] = {
             "target": target_name,
