@@ -31,7 +31,6 @@ class ArknightsGuessPlugin(Star):
             if os.path.exists(data_path):
                 with open(data_path, 'r', encoding='utf-8') as f:
                     self.operators = json.load(f)
-                self._migrate_star_ratings(data_path)
                 self._rebuild_pool()
                 logger.info(f"明日方舟猜猜乐数据加载成功: 共 {len(self.operators)} 条，题库 {len(self.high_star_names)} 名（{self.star_min}~{self.star_max} 星）。")
             else:
@@ -42,26 +41,6 @@ class ArknightsGuessPlugin(Star):
         self._load_block_keywords()
         self._load_star_range()
         self._rebuild_pool()
-
-    def _migrate_star_ratings(self, data_path):
-        """星级偏移迁移：PRTS wikitext 稀有度为 0-indexed（0-5 = 实际 1-6 星）。
-
-        旧数据特征：存在星级为 '0' 的条目（Robot 干员，真实体系无 0 星）。
-        检测到则全体 +1 并写回（一次性，幂等）。
-        """
-        has_zero = any(str(info.get("星级")) == "0" for info in self.operators.values())
-        if not has_zero:
-            return
-        for info in self.operators.values():
-            raw = info.get("星级")
-            if str(raw).isdigit():
-                info["星级"] = str(int(raw) + 1)
-        try:
-            with open(data_path, 'w', encoding='utf-8') as f:
-                json.dump(self.operators, f, ensure_ascii=False, indent=2)
-            logger.info("星级数据已迁移为真实星级（+1，旧格式 0-5 → 1-6）。")
-        except Exception as e:
-            logger.error(f"星级迁移写回失败: {e}")
 
     # ==================== 屏蔽词与星数范围存储 ====================
 
@@ -374,7 +353,6 @@ class ArknightsGuessPlugin(Star):
         try:
             with open(data_path, 'r', encoding='utf-8') as f:
                 self.operators = json.load(f)
-            self._migrate_star_ratings(data_path)
             self._rebuild_pool()
         except Exception as e:
             logger.error(f"重新加载数据失败: {e}")

@@ -1,6 +1,6 @@
 # 明日方舟干员猜猜挑战 (Arknights Cypher)
 
-![Version](https://img.shields.io/badge/version-v1.6.0-blue)
+![Version](https://img.shields.io/badge/version-v1.6.1-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![License](https://img.shields.io/badge/license-AGPL--3.0-orange)
 
@@ -75,7 +75,7 @@ git clone https://github.com/sfw2099/astrbot_plugin_arknights_cypher.git
 
 > 屏蔽词与星数范围设置**持久保存**（重启后仍生效）。若屏蔽词覆盖了全部题库，当局自动忽略屏蔽并提示。屏蔽词上限 100 个。
 >
-> **星级说明**：v1.6.0 起星级为真实星级（1-6 星，六星=6）。旧数据（PRTS wikitext 0-indexed 格式）会在首次加载时自动迁移 +1。
+> **星级说明**：v1.6.1 起数据文件即为真实星级（1-6 星，六星=6）。
 
 ---
 
